@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Erha的简易聊天箱</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <style>
+        body { background-color: #121212; color: #e0e0e0; font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; }
+        
+        /* 侧边栏 */
+        .sidebar { background-color: #1c1c26; border-right: 1px solid #2d2d3b; display: flex; flex-direction: column; }
+        .session-item { 
+            padding: 10px 12px; margin-bottom: 4px; border-radius: 8px; cursor: pointer; 
+            transition: all 0.2s; font-size: 0.85rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+            color: #9ca3af; border: 1px solid transparent; display: flex; justify-content: space-between; align-items: center;
+        }
+        .session-item:hover { background-color: #2d2d3b; color: white; }
+        .session-item.active { background-color: #312e81; color: white; border-color: #4f46e5; }
+        
+        /* 输入控件 */
+        .input-field { background-color: #0b0b0f; border: 1px solid #444; color: white; }
+        .input-field:focus { border-color: #a78bfa; outline: none; }
+        .btn-primary { background-color: #4f46e5; }
+        .btn-primary:hover { background-color: #4338ca; }
+        .btn-primary:disabled { background-color: #312e81; cursor: not-allowed; opacity: 0.6; }
+        
+        /* 聊天气泡与工具栏 */
+        .chat-bubble { max-width: 85%; box-shadow: 0 2px 5px rgba(0,0,0,0.2); position: relative; }
+        .user-bubble { background-color: #374151; color: #e5e7eb; }
+        .bot-bubble { background-color: #1e1e2e; color: #d1d5db; }
+        
+        .bubble-tools {
+            position: absolute; bottom: -24px; right: 0;
+            opacity: 0; transition: opacity 0.2s; display: flex; gap: 8px;
+            background: #121212; padding: 2px 8px; border-radius: 12px; border: 1px solid #333;
+            z-index: 10;
+        }
+        .chat-row:hover .bubble-tools { opacity: 1; }
+        .tool-btn { font-size: 0.75rem; color: #9ca3af; cursor: pointer; padding: 2px; }
+        .tool-btn:hover { color: white; }
+
+        .edit-textarea {
+            width: 100%; background: #0f0f0f; color: #ddd; border: 1px solid #555;
+            border-radius: 4px; padding: 8px; font-family: inherit; font-size: inherit;
+            resize: vertical; min-height: 60px; outline: none;
+        }
+
+        .prose pre { background: #111 !important; padding: 0.8em; border-radius: 6px; border: 1px solid #333; }
+        .prose code { font-family: 'Consolas', monospace; color: #fca5a5; }
+        .prose p { margin-bottom: 0.5em; }
+        
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #1c1c26; }
+        ::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 3px; }
+
+        .tab-btn { padding-bottom: 5px; border-bottom: 2px solid transparent; color: #6b7280; }
+        .tab-btn.active { border-color: #6366f1; color: #818cf8; font-weight: bold; }
+
+        .toggle-checkbox:checked { right: 0; border-color: #68D391; }
+        .toggle-checkbox:checked + .toggle-label { background-color: #68D391; }
+    </style>
+</head>
+<body class="h-screen flex overflow-hidden text-sm md:text-base">
+
+    <!-- 左侧栏 -->
+    <div class="w-72 sidebar hidden md:flex h-full z-50 transition-all absolute md:relative" id="sidebar">
+        <div class="p-4 border-b border-gray-700 shrink-0">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-lg font-bold text-indigo-400"><i class="fa-solid fa-robot mr-2"></i>Erha的简易聊天箱</h2>
+                <button onclick="toggleSidebar()" class="md:hidden text-gray-400"><i class="fa-solid fa-times"></i></button>
+            </div>
+            <button onclick="createNewChat()" class="w-full bg-indigo-600 hover:bg-indigo-500 text-white py-2 rounded-lg flex items-center justify-center gap-2 transition shadow-lg">
+                <i class="fa-solid fa-plus"></i> 新建对话
+            </button>
+        </div>
+
+        <div class="flex px-4 mt-2 gap-4 border-b border-gray-700 shrink-0">
+            <button onclick="switchTab('chats')" id="tab-chats" class="tab-btn active flex-1 text-center">历史对话</button>
+            <button onclick="switchTab('settings')" id="tab-settings" class="tab-btn flex-1 text-center">API 设置</button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-3 relative">
+            <div id="chatListContainer" class="space-y-1"></div>
+
+            <!-- 设置面板 -->
+            <div id="settingsContainer" class="space-y-4 hidden px-1">
+                
+                <!-- 需求3：配置管理 (API Profile) -->
+                <div class="bg-[#252533] p-3 rounded-lg border border-gray-700">
+                    <label class="block text-xs text-gray-400 mb-2 font-bold">⚡ 快速切换 API 站点</label>
+                    <div class="flex gap-2 mb-2">
+                        <select id="profileSelect" onchange="loadProfile()" class="flex-1 input-field rounded p-1 text-xs h-8">
+                            <option value="" disabled selected>选择预设...</option>
+                        </select>
+                        <button onclick="deleteProfile()" class="w-8 h-8 bg-red-900/50 hover:bg-red-900 text-red-300 rounded border border-red-800 flex items-center justify-center" title="删除当前预设">
+                            <i class="fa-solid fa-minus"></i>
+                        </button>
+                    </div>
+                    <button onclick="saveProfile()" class="w-full bg-gray-700 hover:bg-gray-600 text-xs py-1.5 rounded border border-gray-600 transition">
+                        <i class="fa-solid fa-floppy-disk mr-1"></i> 保存当前配置为新预设
+                    </button>
+                </div>
+
+                <hr class="border-gray-700 opacity-50">
+
+                <!-- API URL -->
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1 font-bold">API Endpoint (地址)</label>
+                    <input type="text" id="apiUrl" placeholder="例如: https://api.deepseek.com" class="w-full input-field rounded p-2 text-xs" onchange="saveSettings()">
+                    <p class="text-[10px] text-gray-500 mt-1">代码会自动补全 /v1</p>
+                </div>
+
+                <!-- API Key -->
+                <div>
+                    <label class="block text-xs text-gray-400 mb-1 font-bold">API Key (密钥)</label>
+                    <input type="password" id="apiKey" placeholder="sk-..." class="w-full input-field rounded p-2 text-xs" onchange="saveSettings()">
+                </div>
+
+                <!-- 流式开关 -->
+                <div class="flex items-center justify-between bg-[#2d2d3b] p-2 rounded border border-gray-700">
+                    <span class="text-xs text-gray-300 font-bold">流式传输 (打字机)</span>
+                    <div class="relative inline-block w-10 mr-2 align-middle select-none transition duration-200 ease-in">
+                        <input type="checkbox" id="streamToggle" class="toggle-checkbox absolute block w-5 h-5 rounded-full bg-white border-4 appearance-none cursor-pointer transition-all duration-300 left-0" onchange="saveSettings()"/>
+                        <label for="streamToggle" class="toggle-label block overflow-hidden h-5 rounded-full bg-gray-600 cursor-pointer"></label>
+                    </div>
+                </div>
+
+                <!-- 模型选择 -->
+                <div>
+                    <div class="flex justify-between items-center mb-1">
+                        <label class="text-xs text-gray-400 font-bold">模型名称</label>
+                        <button onclick="fetchModels()" id="fetchBtn" class="text-[10px] bg-green-800 hover:bg-green-700 text-green-100 px-2 py-0.5 rounded"><i class="fa-solid fa-sync"></i> 列表</button>
+                    </div>
+                    <select id="modelSelect" onchange="syncModelInput()" class="w-full input-field rounded p-2 text-xs mb-2 hidden"></select>
+                    <input type="text" id="modelName" value="gemini-1.5-flash" class="w-full input-field rounded p-2 text-xs" onchange="saveSettings()">
+                </div>
+                
+                <div class="pt-4 border-t border-gray-700">
+                     <button onclick="clearAllData()" class="w-full border border-red-900 text-red-500 hover:bg-red-900/20 py-2 rounded text-xs"><i class="fa-solid fa-bomb mr-1"></i> 重置所有数据</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 主聊天区域 -->
+    <div class="flex-1 flex flex-col h-full relative bg-[#0b0b0f]">
+        <div class="md:hidden bg-[#1c1c26] p-3 flex justify-between items-center shadow-md shrink-0">
+            <span class="font-bold text-indigo-400 truncate max-w-[200px]" id="mobileHeaderTitle">Erha Chat</span>
+            <button onclick="toggleSidebar()" class="text-gray-300"><i class="fa-solid fa-bars"></i></button>
+        </div>
+
+        <div id="chatContainer" class="flex-1 overflow-y-auto p-4 space-y-8 scroll-smooth pb-20">
+            <div id="welcomeScreen" class="h-full flex flex-col items-center justify-center text-gray-500 opacity-50">
+                <i class="fa-regular fa-comments text-6xl mb-4"></i>
+                <p>选择配置，开始聊天</p>
+            </div>
+        </div>
+
+        <div class="p-4 bg-[#1c1c26] border-t border-gray-700 shrink-0">
+            <div class="max-w-5xl mx-auto relative flex items-end space-x-2">
+                <textarea id="userInput" rows="1" 
+                    class="flex-1 bg-[#0b0b0f] text-gray-200 rounded-xl p-3 pl-4 shadow-inner border border-gray-600 focus:border-indigo-500 outline-none resize-none overflow-hidden"
+                    placeholder="Ctrl + Enter 发送消息..." oninput="autoResize(this)" onkeydown="handleEnter(event)"></textarea>
+                <button onclick="handleUserSubmit()" id="sendBtn"
+                    class="p-3 btn-primary rounded-xl text-white shadow-lg transition transform active:scale-95 w-12 h-12 flex items-center justify-center">
+                    <i class="fa-solid fa-paper-plane"></i>
+                </button>
+            </div>
+            <div class="max-w-5xl mx-auto text-[10px] text-gray-500 mt-1 text-right pr-14">
+                Enter 换行 / Ctrl + Enter 发送
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // --- 全局变量 ---
+        let sessions = {}; 
+        let profiles = []; // 存储API配置预设
+        let currentSessionId = null;
+        let abortController = null;
+
+        // --- 初始化 ---
+        window.onload = () => {
+            loadSettings();
+            loadProfiles(); // 加载预设
+            loadSessions();
+            
+            const keys = Object.keys(sessions).sort((a, b) => sessions[b].timestamp - sessions[a].timestamp);
+            if(keys.length > 0) loadChat(keys[0]); 
+            else createNewChat();
+
+            // 恢复模型列表
+            const cachedModels = localStorage.getItem('st_model_list');
+            if (cachedModels) {
+                try { populateModelDropdown(JSON.parse(cachedModels)); } catch(e) {}
+            }
+            
+            // 恢复最后一次的模型选择
+            const savedModel = localStorage.getItem('st_model');
+            if(savedModel) {
+                document.getElementById('modelName').value = savedModel;
+                const select = document.getElementById('modelSelect');
+                if(select.options.length > 0) select.value = savedModel;
+            }
+        };
+
+        // --- 设置与配置管理 (Profile) ---
+        function loadSettings() {
+            document.getElementById('apiUrl').value = localStorage.getItem('st_api_url') || '';
+            document.getElementById('apiKey').value = localStorage.getItem('st_api_key') || '';
+            document.getElementById('modelName').value = localStorage.getItem('st_model') || 'gemini-1.5-flash';
+            document.getElementById('streamToggle').checked = localStorage.getItem('st_stream') === 'true';
+        }
+
+        function saveSettings() {
+            localStorage.setItem('st_api_url', document.getElementById('apiUrl').value);
+            localStorage.setItem('st_api_key', document.getElementById('apiKey').value);
+            localStorage.setItem('st_model', document.getElementById('modelName').value);
+            localStorage.setItem('st_stream', document.getElementById('streamToggle').checked);
+        }
+
+        function loadProfiles() {
+            const saved = localStorage.getItem('st_profiles');
+            profiles = saved ? JSON.parse(saved) : [];
+            renderProfileSelect();
+        }
+
+        function renderProfileSelect() {
+            const select = document.getElementById('profileSelect');
+            select.innerHTML = '<option value="" disabled selected>-- 选择预设 --</option>';
+            profiles.forEach((p, index) => {
+                const opt = document.createElement('option');
+                opt.value = index;
+                opt.text = p.name;
+                select.appendChild(opt);
+            });
+        }
+
+        function saveProfile() {
+            const url = document.getElementById('apiUrl').value;
+            const key = document.getElementById('apiKey').value;
+            if(!url || !key) { alert("请先填写 API URL 和 Key"); return; }
+            
+            const name = prompt("给这个配置起个名字 (如: DeepSeek, Gemini):");
+            if(name) {
+                profiles.push({ name, url, key });
+                localStorage.setItem('st_profiles', JSON.stringify(profiles));
+                renderProfileSelect();
+                // 自动选中新建的
+                document.getElementById('profileSelect').value = profiles.length - 1;
+            }
+        }
+
+        function loadProfile() {
+            const index = document.getElementById('profileSelect').value;
+            if(index !== "") {
+                const p = profiles[index];
+                document.getElementById('apiUrl').value = p.url;
+                document.getElementById('apiKey').value = p.key;
+                saveSettings(); // 自动应用
+                alert(`已切换到: ${p.name}`);
+            }
+        }
+
+        function deleteProfile() {
+            const index = document.getElementById('profileSelect').value;
+            if(index === "") return;
+            if(confirm(`确定删除预设 "${profiles[index].name}" 吗?`)) {
+                profiles.splice(index, 1);
+                localStorage.setItem('st_profiles', JSON.stringify(profiles));
+                renderProfileSelect();
+                document.getElementById('apiUrl').value = "";
+                document.getElementById('apiKey').value = "";
+            }
+        }
+
+        // --- 聊天逻辑 ---
+        function loadChat(id) {
+            if (!sessions[id]) return;
+            currentSessionId = id;
+            const container = document.getElementById('chatContainer');
+            container.innerHTML = '';
+            
+            const sessionData = sessions[id];
+            if (sessionData.history.length === 0) {
+                container.innerHTML = `<div id="welcomeScreen" class="h-full flex flex-col items-center justify-center text-gray-500 opacity-50"><i class="fa-regular fa-comment-dots text-6xl mb-4"></i><p>新对话</p></div>`;
+            }
+
+            sessionData.history.forEach((msg, index) => {
+                let text = msg.content || (msg.parts ? msg.parts[0].text : "");
+                let role = (msg.role === 'model') ? 'assistant' : msg.role;
+                if(text) renderBubble(role, text, false, null, index);
+            });
+
+            renderSessionList();
+            scrollToBottom();
+            document.getElementById('mobileHeaderTitle').innerText = sessionData.title;
+        }
+
+        function renderBubble(role, text, isLoading, customId = null, index = -1) {
+            const container = document.getElementById('chatContainer');
+            const isUser = role === 'user';
+            const wrapper = document.createElement('div');
+            wrapper.className = `flex w-full chat-row ${isUser ? 'justify-end' : 'justify-start'} group`;
+            
+            let contentHtml = isLoading 
+                ? '<div class="flex space-x-1 h-6 items-center px-2"><div class="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce"></div><div class="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style="animation-delay:0.1s"></div><div class="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style="animation-delay:0.2s"></div></div>'
+                : (isUser ? text.replace(/</g, "&lt;") : marked.parse(text));
+
+            const bubble = document.createElement('div');
+            if (customId) bubble.id = customId;
+            if (index !== -1) bubble.dataset.index = index;
+            
+            bubble.className = `p-3 md:p-4 rounded-xl text-sm md:text-base border border-opacity-20 ${isUser ? 'user-bubble rounded-br-none border-gray-600' : 'bot-bubble rounded-tl-none border-gray-700'} chat-bubble prose prose-invert max-w-none break-words`;
+            
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'bubble-content';
+            contentDiv.innerHTML = contentHtml;
+            bubble.appendChild(contentDiv);
+
+            // 工具栏：编辑 + 删除 + 重Roll
+            if (!isLoading && index !== -1) {
+                const tools = document.createElement('div');
+                tools.className = 'bubble-tools';
+                tools.innerHTML += `<i onclick="enableEdit(${index})" class="fa-solid fa-pen tool-btn" title="编辑"></i>`;
+                
+                const isLast = index === sessions[currentSessionId].history.length - 1;
+                if (!isUser && isLast) {
+                     tools.innerHTML += `<i onclick="reRoll()" class="fa-solid fa-rotate-right tool-btn hover:text-green-400" title="重新生成"></i>`;
+                }
+                bubble.appendChild(tools);
+            }
+            
+            if (!isLoading && !isUser) {
+                 bubble.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+            }
+
+            wrapper.appendChild(bubble);
+            container.appendChild(wrapper);
+        }
+
+        // --- 编辑与删除 (需求1) ---
+        function enableEdit(index) {
+            const bubble = document.querySelector(`div[data-index="${index}"]`);
+            if (!bubble) return;
+            const contentDiv = bubble.querySelector('.bubble-content');
+            const toolsDiv = bubble.querySelector('.bubble-tools');
+            if(toolsDiv) toolsDiv.style.display = 'none';
+
+            const msg = sessions[currentSessionId].history[index];
+            const originalText = msg.content || (msg.parts ? msg.parts[0].text : "");
+
+            // 增加了一个删除按钮
+            contentDiv.innerHTML = `
+                <textarea class="edit-textarea">${originalText}</textarea>
+                <div class="flex gap-2 mt-2 justify-between">
+                    <button onclick="deleteMessage(${index})" class="text-xs px-3 py-1 rounded bg-red-900/50 border border-red-800 hover:bg-red-900 text-red-300">
+                        <i class="fa-solid fa-trash mr-1"></i>删除此条
+                    </button>
+                    <div class="flex gap-2">
+                        <button onclick="cancelEdit()" class="text-xs px-3 py-1 rounded border border-gray-600 hover:bg-gray-700 text-gray-300">取消</button>
+                        <button onclick="saveEdit(${index})" class="text-xs px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white">保存</button>
+                    </div>
+                </div>`;
+            const ta = contentDiv.querySelector('textarea');
+            ta.style.height = ta.scrollHeight + 'px';
+            ta.focus();
+        }
+
+        function deleteMessage(index) {
+            if(confirm("确定删除这条消息吗？\n(如果这是报错信息，删除后可继续对话)")) {
+                sessions[currentSessionId].history.splice(index, 1);
+                saveSessions();
+                loadChat(currentSessionId); // 重新渲染
+            }
+        }
+
+        function saveEdit(index) {
+            const bubble = document.querySelector(`div[data-index="${index}"]`);
+            const newText = bubble.querySelector('textarea').value.trim();
+            if (newText) {
+                const oldRole = sessions[currentSessionId].history[index].role;
+                sessions[currentSessionId].history[index] = { role: oldRole, content: newText };
+                saveSessions();
+            }
+            loadChat(currentSessionId);
+        }
+        function cancelEdit() { loadChat(currentSessionId); }
+
+        function reRoll() {
+            const history = sessions[currentSessionId].history;
+            if (history.length > 0 && (history[history.length-1].role === 'assistant' || history[history.length-1].role === 'model')) {
+                history.pop();
+                saveSessions();
+                loadChat(currentSessionId);
+                fetchBotResponse();
+            }
+        }
+
+        // --- 核心逻辑 ---
+        // 需求2：输入处理 Ctrl+Enter
+        function handleEnter(e) {
+            if (e.key === 'Enter') {
+                if (e.ctrlKey) {
+                    e.preventDefault(); // 阻止默认换行
+                    handleUserSubmit(); // 发送
+                }
+                // 如果没有 Ctrl，就默认换行，什么都不用做
+            }
+        }
+
+        async function handleUserSubmit() {
+            const text = document.getElementById('userInput').value.trim();
+            if (!text) return;
+            if (!document.getElementById('apiKey').value) { alert('请先填写 API Key'); switchTab('settings'); return; }
+
+            document.getElementById('userInput').value = '';
+            document.getElementById('userInput').style.height = 'auto';
+            document.getElementById('welcomeScreen')?.remove();
+
+            if (!sessions[currentSessionId]) createNewChat();
+            const curr = sessions[currentSessionId];
+            
+            curr.history.push({ role: "user", content: text });
+            if (curr.title === '新对话') curr.title = text.substring(0, 15) + '...';
+            curr.timestamp = Date.now();
+            saveSessions();
+
+            renderBubble('user', text, false, null, curr.history.length - 1);
+            scrollToBottom();
+            fetchBotResponse();
+        }
+
+        async function fetchBotResponse() {
+            const sendBtn = document.getElementById('sendBtn');
+            sendBtn.disabled = true;
+            const loadingId = 'loading-' + Date.now();
+            renderBubble('assistant', '', true, loadingId);
+            const loadingBubble = document.getElementById(loadingId);
+            scrollToBottom();
+
+            const currSession = sessions[currentSessionId];
+            const apiKey = document.getElementById('apiKey').value;
+            const modelName = document.getElementById('modelName').value;
+            const isStream = document.getElementById('streamToggle').checked;
+            const baseUrl = getCleanBaseUrl();
+
+            const messages = currSession.history.map(m => ({
+                role: (m.role === 'model') ? 'assistant' : m.role,
+                content: m.content || (m.parts ? m.parts[0].text : "")
+            }));
+
+            abortController = new AbortController();
+            let fullText = "";
+
+            try {
+                const url = `${baseUrl}/chat/completions`; 
+                console.log(`[API] POST ${url} Model: ${modelName}`);
+
+                const response = await fetch(url, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${apiKey}`
+                    },
+                    body: JSON.stringify({
+                        model: modelName,
+                        messages: messages,
+                        stream: isStream
+                    }),
+                    signal: abortController.signal
+                });
+
+                if (!response.ok) {
+                    const err = await response.json().catch(() => ({}));
+                    throw new Error(err.error?.message || `HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                if (isStream) {
+                    const reader = response.body.getReader();
+                    const decoder = new TextDecoder();
+                    loadingBubble.innerHTML = `<div class="text-[10px] text-gray-500 font-bold mb-1 opacity-50 select-none">${modelName}</div><div class="bubble-content"></div>`;
+                    const contentArea = loadingBubble.querySelector('.bubble-content');
+
+                    while (true) {
+                        const { done, value } = await reader.read();
+                        if (done) break;
+                        const chunk = decoder.decode(value, { stream: true });
+                        const lines = chunk.split('\n');
+                        for (const line of lines) {
+                            if (line.startsWith('data: ')) {
+                                const jsonStr = line.substring(6).trim();
+                                if (jsonStr === '[DONE]') continue;
+                                try {
+                                    const data = JSON.parse(jsonStr);
+                                    const delta = data.choices?.[0]?.delta?.content;
+                                    if (delta) {
+                                        fullText += delta;
+                                        contentArea.innerHTML = marked.parse(fullText);
+                                        scrollToBottom();
+                                    }
+                                } catch (e) {}
+                            }
+                        }
+                    }
+                    contentArea.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+                } else {
+                    const data = await response.json();
+                    fullText = data.choices?.[0]?.message?.content || "";
+                    loadingBubble.innerHTML = `<div class="text-[10px] text-gray-500 font-bold mb-1 opacity-50 select-none">${modelName}</div><div class="bubble-content">${marked.parse(fullText)}</div>`;
+                    loadingBubble.querySelectorAll('pre code').forEach(block => hljs.highlightElement(block));
+                }
+
+                currSession.history.push({ role: "assistant", content: fullText });
+                saveSessions();
+                loadChat(currentSessionId); 
+
+            } catch (error) {
+                if (error.name !== 'AbortError') {
+                    // 出错时，保存一个报错消息到历史，这样用户就可以点击删除按钮来删除它
+                    // 或者直接在界面显示，但最好是让它变成一个可交互的气泡
+                    const errorMsg = `❌ **请求失败**: ${error.message}`;
+                    
+                    // 替换 Loading 气泡内容，并添加错误样式
+                    loadingBubble.innerHTML = `<div class="bubble-content text-red-400">${marked.parse(errorMsg)}</div>`;
+                    
+                    // 关键：如果报错了，我们手动把这个错误推入历史，这样用户就可以用“删除”按钮把它删掉
+                    // 标记为 'system' 或者 'assistant' 都可以，这里用 system 区分
+                    currSession.history.push({ role: "assistant", content: errorMsg });
+                    saveSessions();
+                    
+                    // 重新加载聊天，以便给这个报错气泡加上“删除”按钮
+                    loadChat(currentSessionId);
+                }
+            } finally {
+                sendBtn.disabled = false;
+            }
+        }
+
+        // --- 辅助工具 ---
+        function getCleanBaseUrl() {
+            let url = document.getElementById('apiUrl').value.trim();
+            if (!url) return 'https://api.openai.com/v1';
+            url = url.replace(/\/+$/, "");
+            if (url.endsWith('/chat/completions')) url = url.replace('/chat/completions', '');
+            if (!url.endsWith('/v1') && !url.endsWith('/v1beta')) url += '/v1';
+            return url;
+        }
+
+        async function fetchModels() {
+            const btn = document.getElementById('fetchBtn'); btn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i>';
+            try {
+                const url = getCleanBaseUrl(); 
+                const key = document.getElementById('apiKey').value;
+                const res = await fetch(`${url}/models`, { headers: { 'Authorization': `Bearer ${key}` } });
+                const data = await res.json();
+                const models = data.data || data.models || [];
+                if(models.length > 0) {
+                    localStorage.setItem('st_model_list', JSON.stringify(models));
+                    populateModelDropdown(models);
+                    alert(`成功获取 ${models.length} 个模型`);
+                } else throw new Error('列表为空');
+            } catch(e) { alert("获取失败: " + e.message); }
+            btn.innerHTML = '<i class="fa-solid fa-sync"></i> 获取列表';
+        }
+
+        function populateModelDropdown(models) {
+            const s = document.getElementById('modelSelect'); s.innerHTML='<option disabled>选择模型</option>';
+            models.sort((a,b) => (a.id||a.name).localeCompare(b.id||b.name));
+            models.forEach(x=>{ const o=document.createElement('option'); o.value = x.id || x.name; o.text = o.value; s.appendChild(o) });
+            s.classList.remove('hidden');
+            const current = document.getElementById('modelName').value;
+            if(current) s.value = current;
+        }
+        function syncModelInput() { document.getElementById('modelName').value = document.getElementById('modelSelect').value; saveSettings(); }
+        function loadSessions() { const s = localStorage.getItem('st_sessions'); if(s) sessions = JSON.parse(s); }
+        function saveSessions() { localStorage.setItem('st_sessions', JSON.stringify(sessions)); renderSessionList(); }
+        function createNewChat() { const id='chat_'+Date.now(); sessions[id]={id,title:'新对话',timestamp:Date.now(),history:[]}; loadChat(id); if(window.innerWidth<768) toggleSidebar(); }
+        function renderSessionList() {
+            const c=document.getElementById('chatListContainer');c.innerHTML='';
+            Object.keys(sessions).sort((a,b)=>sessions[b].timestamp-sessions[a].timestamp).forEach(k=>{
+                const d=document.createElement('div');d.className=`session-item ${k===currentSessionId?'active':''}`;
+                d.onclick=()=>loadChat(k);
+                d.innerHTML=`<div class="truncate"><i class="fa-regular fa-message mr-2 text-xs"></i>${sessions[k].title}</div><i onclick="deleteChat(event,'${k}')" class="fa-solid fa-trash text-gray-500 hover:text-red-400 p-1"></i>`;
+                c.appendChild(d);
+            });
+        }
+        function deleteChat(e,id){e.stopPropagation();if(confirm('删除?')){delete sessions[id];saveSessions();if(id===currentSessionId)createNewChat();}}
+        function switchTab(t){document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));document.getElementById('tab-'+t).classList.add('active');document.getElementById('chatListContainer').style.display=t==='chats'?'block':'none';document.getElementById('settingsContainer').style.display=t==='settings'?'block':'none';}
+        function autoResize(el){el.style.height='auto';el.style.height=Math.min(el.scrollHeight,200)+'px';}
+        function scrollToBottom(){const c=document.getElementById('chatContainer');c.scrollTop=c.scrollHeight;}
+        function toggleSidebar(){document.getElementById('sidebar').classList.toggle('hidden');}
+        function clearAllData(){if(confirm("警告：清空所有数据？")){localStorage.clear();location.reload();}}
+    </script>
+</body>
+</html>
